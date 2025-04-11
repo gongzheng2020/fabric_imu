@@ -84,7 +84,7 @@ class DeviceModel:
                 # 读取磁场四元数 Reading magnetic field quaternions
                 print("Reading magnetic field quaternions")
                 time.sleep(3)
-                asyncio.create_task(self.sendDataTh())
+                # asyncio.create_task(self.sendDataTh())
 
             if notify_characteristic:
                 print(f"Characteristic: {notify_characteristic}")
