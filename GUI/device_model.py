@@ -119,6 +119,7 @@ class DeviceModel:
     # 串口数据处理  Serial port data processing
     def onDataReceived(self, sender, data):
         tempdata = bytes.fromhex(data.hex())
+        print(tempdata)
         for var in tempdata:
             self.TempBytes.append(var)
             if len(self.TempBytes) == 1 and self.TempBytes[0] != 0x55:
