@@ -5,7 +5,7 @@
 
 // Constructor
 AHRS::AHRS()
-    : eluer{0}, accel{0}, accel_min{0}, accel_max{0}, magnetom{0}, magnetom_min{0}, magnetom_max{0}, magnetom_tmp{0},
+    : real_accel{0}, real_gyro{0}, real_magnetom{0}, accel{0}, accel_min{0}, accel_max{0}, magnetom{0}, magnetom_min{0}, magnetom_max{0}, magnetom_tmp{0},
       gyro{0}, gyro_average{0}, gyro_num_samples(0), MAG_Heading(0), Accel_Vector{0}, Gyro_Vector{0},
       Omega_Vector{0}, Omega_P{0}, Omega_I{0}, Omega{0}, errorRollPitch{0}, errorYaw{0},
       DCM_Matrix{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}, Update_Matrix{{0, 1, 2}, {3, 4, 5}, {6, 7, 8}},
@@ -123,6 +123,9 @@ void AHRS::compensateSensorErrors()
     accel[0] = (raw_accel[0] - ACCEL_X_OFFSET) * ACCEL_X_SCALE;
     accel[1] = (raw_accel[1] - ACCEL_Y_OFFSET) * ACCEL_Y_SCALE;
     accel[2] = (raw_accel[2] - ACCEL_Z_OFFSET) * ACCEL_Z_SCALE;
+    real_accel[0] = accel[0]/GRAVITY;
+    real_accel[1] = accel[1]/GRAVITY;
+    real_accel[2] = accel[2]/GRAVITY;
 
 #ifdef CALIBRATION__MAGN_USE_EXTENDED
     for (int i = 0; i < 3; i++)
@@ -132,11 +135,17 @@ void AHRS::compensateSensorErrors()
     magnetom[0] = (raw_magnetom[0] - MAGN_X_OFFSET) * MAGN_X_SCALE;
     magnetom[1] = (raw_magnetom[1] - MAGN_Y_OFFSET) * MAGN_Y_SCALE;
     magnetom[2] = (raw_magnetom[2] - MAGN_Z_OFFSET) * MAGN_Z_SCALE;
+    real_magnetom[0] = magnetom[0] / MAGN_SCALED_GAUSS(1);
+    real_magnetom[1] = magnetom[1] / MAGN_SCALED_GAUSS(1);
+    real_magnetom[2] = magnetom[2] / MAGN_SCALED_GAUSS(1);
 #endif
 
     gyro[0] = raw_gyro[0] - GYRO_AVERAGE_OFFSET_X; // gyro x roll
     gyro[1] = raw_gyro[1] - GYRO_AVERAGE_OFFSET_Y; // gyro y pitch
     gyro[2] = raw_gyro[2] - GYRO_AVERAGE_OFFSET_Z; // gyro z yaw
+    real_gyro[0] = gyro[0] * GYRO_SCALED_RAD(1);
+    real_gyro[1] = gyro[1] * GYRO_SCALED_RAD(1);
+    real_gyro[2] = gyro[2] * GYRO_SCALED_RAD(1);
 }
 
 void AHRS::compassHeading()
@@ -161,7 +170,7 @@ void AHRS::compassHeading()
     MAG_Heading = atan2(-mag_y, mag_x);
 }
 
-void AHRS::delay(uint16_t delayMS)
+void AHRS::delayMS(uint16_t delayMS)
 {
     // This function is empty, but can be overridden in a derived class
     // to provide a custom delay implementation.
@@ -175,11 +184,11 @@ float AHRS::getData(SensorType sensorType, Axis axis, float *data)
         switch (sensorType)
         {
         case SensorType::Accel:
-            return accel[static_cast<int>(axis)];
+            return real_accel[static_cast<int>(axis)];
         case SensorType::Magnetom:
-            return magnetom[static_cast<int>(axis)];
+            return real_magnetom[static_cast<int>(axis)];
         case SensorType::Gyro:
-            return gyro[static_cast<int>(axis)];
+            return real_gyro[static_cast<int>(axis)];
         case SensorType::Euler:
             return eluer[static_cast<int>(axis)];
         default:
@@ -192,13 +201,13 @@ float AHRS::getData(SensorType sensorType, Axis axis, float *data)
         switch (sensorType)
         {
         case SensorType::Accel:
-            source = accel;
+            source = real_accel;
             break;
         case SensorType::Magnetom:
-            source = magnetom;
+            source = real_magnetom;
             break;
         case SensorType::Gyro:
-            source = gyro;
+            source = real_gyro;
             break;
         case SensorType::Euler:
             source = eluer;
@@ -273,7 +282,7 @@ void AHRS::calibration(uint8_t calibration_sensor)
                 Serial.println();
         }
     }
-    delay(100);
+    delayMS(100);
 }
 
 void AHRS::normalize()
@@ -389,14 +398,30 @@ void AHRS::matrixUpdate()
     }
 }
 
+// Low-pass filter implementation
+float AHRS::lowPassFilter(float currentValue, float previousValue, float alpha) {
+    return alpha * currentValue + (1 - alpha) * previousValue;
+}
+
 void AHRS::eulerAngles()
 {
     pitch = -asin(DCM_Matrix[2][0]);
     roll = atan2(DCM_Matrix[2][1], DCM_Matrix[2][2]);
     yaw = atan2(DCM_Matrix[1][0], DCM_Matrix[0][0]);
-    eluer[0] = yaw;
-    eluer[1] = pitch;
-    eluer[2] = roll;
+
+    // Apply low-pass filter to Euler angles
+    static float filteredPitch = 0;
+    static float filteredRoll = 0;
+    static float filteredYaw = 0;
+    const float alpha = 0.1f; // Filter coefficient (adjust as needed)
+
+    filteredPitch = lowPassFilter(pitch, filteredPitch, alpha);
+    filteredRoll = lowPassFilter(roll, filteredRoll, alpha);
+    filteredYaw = lowPassFilter(yaw, filteredYaw, alpha);
+
+    eluer[0] = filteredPitch;
+    eluer[1] = filteredRoll;
+    eluer[2] = filteredYaw;
 }
 
 float AHRS::vectorDotProduct(const float v1[3], const float v2[3])

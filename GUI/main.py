@@ -257,7 +257,8 @@ class mainwindow(QMainWindow):
     def connect(self):
         if self.BLEdevice is not None and self.BLEdevice.isOpen:
             self.timer.stop()
-            self.BLEdevice.closeDevice()
+            if self.BLEdevice.isOpen:
+                self.BLEdevice.closeDevice()
             self.ui.pushButton_4.setStyleSheet("background-color: white")
             self.ui.pushButton_4.setText("连接设备")
             return

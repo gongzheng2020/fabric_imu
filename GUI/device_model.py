@@ -21,7 +21,11 @@ class DeviceModel:
     # 临时数组 Temporary array
     TempBytes = []
 
-    # endregion
+    # 将字节数组转换为浮点数 Convert byte array to float
+    def bytesToFloat(self, byte_array):
+        if len(byte_array) != 4:
+            raise ValueError("Byte array must be exactly 4 bytes long")
+        return struct.unpack('<f', bytes(byte_array))[0]
 
     def __init__(self, deviceName, BLEDevice, callback_method):
         print("Initialize device model")
@@ -84,7 +88,7 @@ class DeviceModel:
                 # 读取磁场四元数 Reading magnetic field quaternions
                 print("Reading magnetic field quaternions")
                 time.sleep(3)
-                # asyncio.create_task(self.sendDataTh())
+                asyncio.create_task(self.sendDataTh())
 
             if notify_characteristic:
                 print(f"Characteristic: {notify_characteristic}")
@@ -110,137 +114,69 @@ class DeviceModel:
 
     async def sendDataTh(self):
         while self.isOpen:
-            await self.readReg(0x3A)
-            time.sleep(0.1)
-            await self.readReg(0x51)
-            time.sleep(0.1)
+            # await self.readReg(0x3A)
+            await time.sleep(0.1)
+            # await self.readReg(0x51)
+            await time.sleep(0.1)
 
     # region 数据解析 data analysis
     # 串口数据处理  Serial port data processing
     def onDataReceived(self, sender, data):
         tempdata = bytes.fromhex(data.hex())
-        print(tempdata)
-        for var in tempdata:
-            self.TempBytes.append(var)
-            if len(self.TempBytes) == 1 and self.TempBytes[0] != 0x55:
-                del self.TempBytes[0]
-                continue
-            if len(self.TempBytes) == 2 and (self.TempBytes[1] != 0x61 and self.TempBytes[1] != 0x71):
-                del self.TempBytes[0]
-                continue
-            if len(self.TempBytes) == 20:
-                self.processData(self.TempBytes)
-                self.TempBytes.clear()
+        self.TempBytes = list(tempdata)  
+        self.parseData(self.TempBytes)
+
+    def parseData(self, data):
+        # 状态机变量
+        state = 0
+        cnt = 0
+        data_receive = []
+        checkout = 0
+
+        for dat in data:
+            if state == 0 and dat == 0xAA:
+                state += 1
+            elif state == 1 and dat == 0x55:
+                state += 1
+            elif state == 2:
+                data_receive.append(dat)
+                cnt += 1
+                if cnt >= 37:  # 数据包长度
+                    # 校验和计算
+                    checkout = sum(data_receive[:-1]) & 0xFF
+                    if checkout == data_receive[-1]:
+                        # print("Checksum passed, decoding data...")
+                        self.processData(data_receive[:-1])
+                    else:
+                        print("Checksum failed!")
+                    # 重置状态机
+                    state = 0
+                    cnt = 0
+                    data_receive = []
+            else:
+                state = 0
 
     # 数据解析 data analysis
     def processData(self, Bytes):
-        if Bytes[1] == 0x61:
-            Ax = self.getSignInt16(Bytes[3] << 8 | Bytes[2]) / 32768 * 16
-            Ay = self.getSignInt16(Bytes[5] << 8 | Bytes[4]) / 32768 * 16
-            Az = self.getSignInt16(Bytes[7] << 8 | Bytes[6]) / 32768 * 16
-            Gx = self.getSignInt16(Bytes[9] << 8 | Bytes[8]) / 32768 * 2000
-            Gy = self.getSignInt16(Bytes[11] << 8 | Bytes[10]) / 32768 * 2000
-            Gz = self.getSignInt16(Bytes[13] << 8 | Bytes[12]) / 32768 * 2000
-            AngX = self.getSignInt16(Bytes[15] << 8 | Bytes[14]) / 32768 * 180
-            AngY = self.getSignInt16(Bytes[17] << 8 | Bytes[16]) / 32768 * 180
-            AngZ = self.getSignInt16(Bytes[19] << 8 | Bytes[18]) / 32768 * 180
-            self.set("AccX", round(Ax, 3))
-            self.set("AccY", round(Ay, 3))
-            self.set("AccZ", round(Az, 3))
-            self.set("AsX", round(Gx, 3))
-            self.set("AsY", round(Gy, 3))
-            self.set("AsZ", round(Gz, 3))
-            self.set("AngX", round(AngX, 3))
-            self.set("AngY", round(AngY, 3))
-            self.set("AngZ", round(AngZ, 3))
-            self.callback_method(self)
-        else:
-            # 磁场 magnetic field
-            if Bytes[2] == 0x3A:
-                Hx = self.getSignInt16(Bytes[5] << 8 | Bytes[4]) / 120
-                Hy = self.getSignInt16(Bytes[7] << 8 | Bytes[6]) / 120
-                Hz = self.getSignInt16(Bytes[9] << 8 | Bytes[8]) / 120
-                self.set("HX", round(Hx, 3))
-                self.set("HY", round(Hy, 3))
-                self.set("HZ", round(Hz, 3))
-            # 四元数 Quaternion
-            elif Bytes[2] == 0x51:
-                Q0 = self.getSignInt16(Bytes[5] << 8 | Bytes[4]) / 32768
-                Q1 = self.getSignInt16(Bytes[7] << 8 | Bytes[6]) / 32768
-                Q2 = self.getSignInt16(Bytes[9] << 8 | Bytes[8]) / 32768
-                Q3 = self.getSignInt16(Bytes[11] << 8 | Bytes[10]) / 32768
-                self.set("Q0", round(Q0, 5))
-                self.set("Q1", round(Q1, 5))
-                self.set("Q2", round(Q2, 5))
-                self.set("Q3", round(Q3, 5))
-            else:
-                pass
+        Bytes = Bytes[::-1]  # Reverse the order of the Bytes array
+        Gz = self.bytesToFloat(Bytes[0:4])
+        Gy = self.bytesToFloat(Bytes[4:8])
+        Gx = self.bytesToFloat(Bytes[8:12])
+        Az = self.bytesToFloat(Bytes[12:16])
+        Ay = self.bytesToFloat(Bytes[16:20])
+        Ax = self.bytesToFloat(Bytes[20:24])
+        AngZ = self.bytesToFloat(Bytes[24:28]) * (180 / 3.141592653589793)
+        AngY = self.bytesToFloat(Bytes[28:32]) * (180 / 3.141592653589793)
+        AngX = self.bytesToFloat(Bytes[32:36]) * (180 / 3.141592653589793)
+        self.set("AccX", round(Ax, 2))
+        self.set("AccY", round(Ay, 2))
+        self.set("AccZ", round(Az, 2))
+        self.set("AsX", round(Gx, 2))
+        self.set("AsY", round(Gy, 2))
+        self.set("AsZ", round(Gz, 2))
+        self.set("AngX", round(AngX, 2))
+        self.set("AngY", round(AngY, 2))
+        self.set("AngZ", round(AngZ, 2))
+        # print(f"Euler Angles: AngX={round(AngX, 2)}, AngY={round(AngY, 2)}, AngZ={round(AngZ, 2)}")
+        self.callback_method(self)
 
-    # 获得int16有符号数 Obtain int16 signed number
-    @staticmethod
-    def getSignInt16(num):
-        if num >= pow(2, 15):
-            num -= pow(2, 16)
-        return num
-
-    # endregion
-
-    # 发送串口数据 Sending serial port data
-    async def sendData(self, data):
-        try:
-            if self.client.is_connected and self.writer_characteristic is not None:
-                await self.client.write_gatt_char(self.writer_characteristic.uuid, bytes(data))
-        except Exception as ex:
-            print(ex)
-
-    # 读取寄存器 read register
-    async def readReg(self, regAddr):
-        # 封装读取指令并向串口发送数据 Encapsulate read instructions and send data to the serial port
-        await self.sendData(self.get_readBytes(regAddr))
-
-    # 写入寄存器 Write Register
-    async def writeReg(self, regAddr, sValue):
-        # 解锁 unlock
-        self.unlock()
-        # 延迟100ms Delay 100ms
-        time.sleep(0.1)
-        # 封装写入指令并向串口发送数据
-        await self.sendData(self.get_writeBytes(regAddr, sValue))
-        # 延迟100ms Delay 100ms
-        time.sleep(0.1)
-        # 保存 save
-        self.save()
-
-    # 读取指令封装 Read instruction encapsulation
-    @staticmethod
-    def get_readBytes(regAddr):
-        # 初始化
-        tempBytes = [None] * 5
-        tempBytes[0] = 0xff
-        tempBytes[1] = 0xaa
-        tempBytes[2] = 0x27
-        tempBytes[3] = regAddr
-        tempBytes[4] = 0
-        return tempBytes
-
-    # 写入指令封装 Write instruction encapsulation
-    @staticmethod
-    def get_writeBytes(regAddr, rValue):
-        # 初始化
-        tempBytes = [None] * 5
-        tempBytes[0] = 0xff
-        tempBytes[1] = 0xaa
-        tempBytes[2] = regAddr
-        tempBytes[3] = rValue & 0xff
-        tempBytes[4] = rValue >> 8
-        return tempBytes
-
-    # 解锁 unlock
-    def unlock(self):
-        cmd = self.get_writeBytes(0x69, 0xb588)
-        self.sendData(cmd)
-
-    # 保存 save
-    def save(self):
-        cmd = self.get_writeBytes(0x00, 0x0000)
-        self.sendData(cmd)
