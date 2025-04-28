@@ -55,23 +55,24 @@
 #define MAGN_Y_SCALE (100.0f / (MAGN_Y_MAX - MAGN_Y_OFFSET))
 #define MAGN_Z_SCALE (100.0f / (MAGN_Z_MAX - MAGN_Z_OFFSET))
 // Gain for gyroscope (MPU6050)
-#define GYRO_GAIN 0.06098                         // Same gain on all axes(LSB_2000)
+#define GYRO_GAIN 0.06098                          // Same gain on all axes(LSB_2000)
 #define GYRO_SCALED_RAD(x) (x * TO_RAD(GYRO_GAIN)) // Calculate the scaled gyro readings in radians per second
 // Magnetometer gain
-#define MAGN_SCALED_GAUSS(x) (x * 0.000061035f) // Calculate the scaled magnetometer readings in Gauss
+#define MAGN_SCALED_GAUSS(x) (x * 0.02f) // Calculate the scaled magnetometer readings in Gauss
 // DCM parameters
 #define Kp_ROLLPITCH 0.005f
 #define Ki_ROLLPITCH 0.00000005f
 #define Kp_YAW 2.5f
 #define Ki_YAW 0.000005f
 // Stuff
-#define GRAVITY 2048.0f              // "8G reference" used for DCM filter and accelerometer calibration(LSB_2G)
+#define GRAVITY 2048.0f               // "8G reference" used for DCM filter and accelerometer calibration(LSB_2G)
 #define GRAVITY_ACCELERATION 9.80665f // Standard gravity acceleration in m/s^2
 #define TO_RAD(x) (x * 0.01745329252) // *pi/180
 #define TO_DEG(x) (x * 57.2957795131) // *180/pi
 
 // 联合体定义，用于 float 和字节数组之间的转换
-union FloatToBytes {
+union FloatToBytes
+{
     float f;
     uint8_t b[4];
 };
@@ -92,19 +93,31 @@ enum class Axis
     Invalid
 };
 
+struct SensorData
+{
+    float euler[3];
+    float accel[3];
+    float gyro[3];
+};
+
 class AHRS
 {
 public:
+    int16_t raw_accel[3];
+    int16_t raw_magnetom[3];
+    int16_t raw_gyro[3];
+
     AHRS(); // 添加默认构造函数声明
     void init();
-    void run_once();
-    void run_loop(uint16_t loop_ms, bool sendDataAfterRun = false); // 修改 run_loop 函数，添加参数
+    void run_once(float deltaTime);                                 // 修改函数声明，添加 deltaTime 参数
+    bool run_loop(uint16_t loop_ms, bool sendDataAfterRun = false); // 修改返回值为 bool
     void calibration(uint8_t calibration_sensor);
     float getData(SensorType sensorType, Axis axis = Axis::Invalid, float *data = nullptr); // 添加默认参数
-    virtual void data_pack(); // 声明 data_pack 方法
-    virtual void fetchRawSensorData();    // This function must be overridden to get sensors data.
-    virtual void delayMS(uint16_t delayMS); // This function is default Arduino delay(), but can be overridden in a derived class to provide a custom delay implementation.
+    void data_pack(const SensorData &data); // 移除 sendData 参数
+    virtual void fetchRawSensorData();
+    virtual void delayMS(uint16_t delayMS);
     virtual void sendData(uint8_t *data, size_t length);
+    virtual uint32_t getSystemTime();
 
 private:
     // Sensor variables
@@ -119,9 +132,6 @@ private:
     float gyro_average[3];
     float eluer[3];
     int16_t gyro_num_samples;
-    int16_t raw_accel[3];
-    int16_t raw_magnetom[3];
-    int16_t raw_gyro[3];
     float real_accel[3];
     float real_magnetom[3];
     float real_gyro[3];

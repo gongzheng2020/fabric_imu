@@ -19,8 +19,11 @@ void AHRS::init()
     resetSensorFusion();
 }
 
-void AHRS::run_once()
+void AHRS::run_once(float deltaTime)
 {
+    if(deltaTime > 0){
+        G_Dt = deltaTime / 1000.0f; // 使用传入的 G_Dt 值
+    }
     fetchRawSensorData();
     compensateSensorErrors();
     compassHeading();
@@ -30,7 +33,7 @@ void AHRS::run_once()
     eulerAngles();
 }
 
-void AHRS::data_pack()
+void AHRS::data_pack(const SensorData &data)
 {
     int16_t _cnt = 0;
     uint8_t data_to_send[100]; // 待发送的字节数组
@@ -39,11 +42,9 @@ void AHRS::data_pack()
     uint8_t _start = _cnt;
 
     // 发送 Euler 数据
-    float eulerData[3];
-    getData(SensorType::Euler, Axis::Invalid, eulerData);
     for (int i = 0; i < 3; i++) {
         FloatToBytes converter;
-        converter.f = eulerData[i];
+        converter.f = data.euler[i];
         data_to_send[_cnt++] = converter.b[3];
         data_to_send[_cnt++] = converter.b[2];
         data_to_send[_cnt++] = converter.b[1];
@@ -51,11 +52,9 @@ void AHRS::data_pack()
     }
 
     // 发送 Accel 数据
-    float accelData[3];
-    getData(SensorType::Accel, Axis::Invalid, accelData);
     for (int i = 0; i < 3; i++) {
         FloatToBytes converter;
-        converter.f = accelData[i];
+        converter.f = data.accel[i];
         data_to_send[_cnt++] = converter.b[3];
         data_to_send[_cnt++] = converter.b[2];
         data_to_send[_cnt++] = converter.b[1];
@@ -63,11 +62,9 @@ void AHRS::data_pack()
     }
 
     // 发送 Gyro 数据
-    float gyroData[3];
-    getData(SensorType::Gyro, Axis::Invalid, gyroData);
     for (int i = 0; i < 3; i++) {
         FloatToBytes converter;
-        converter.f = gyroData[i];
+        converter.f = data.gyro[i];
         data_to_send[_cnt++] = converter.b[3];
         data_to_send[_cnt++] = converter.b[2];
         data_to_send[_cnt++] = converter.b[1];
@@ -81,25 +78,35 @@ void AHRS::data_pack()
     }
     data_to_send[_cnt++] = checksum;
 
-    // 调用虚函数发送数据
+    // 调用发送数据的虚函数
     sendData(data_to_send, _cnt);
 }
 
-void AHRS::run_loop(uint16_t loop_ms, bool sendDataAfterRun)
+void AHRS::fetchRawSensorData()
 {
-    if ((millis() - timestamp) >= loop_ms)
+}
+
+bool AHRS::run_loop(uint16_t loop_ms, bool sendDataAfterRun)
+{
+    if ((getSystemTime() - timestamp) >= loop_ms) // 使用虚函数替代 millis()
     {
         timestamp_old = timestamp;
-        timestamp = millis();
+        timestamp = getSystemTime();
         if (timestamp > timestamp_old)
             G_Dt = (float)(timestamp - timestamp_old) / 1000.0f; // Real time of loop run. We use this on the DCM algorithm (gyro integration time)
         else
             G_Dt = 0;
-        run_once();
+        run_once(-1);
         if (sendDataAfterRun) {
-            data_pack(); // 如果参数为 true，则调用 data_pack
+            SensorData sensorData;
+            getData(SensorType::Euler, Axis::Invalid, sensorData.euler);
+            getData(SensorType::Accel, Axis::Invalid, sensorData.accel);
+            getData(SensorType::Gyro, Axis::Invalid, sensorData.gyro);
+            data_pack(sensorData); // 调用 data_pack
         }
+        return true; // 运行成功后返回 true
     }
+    return false; // 未达到运行条件时返回 false
 }
 
 // Private methods
@@ -135,9 +142,9 @@ void AHRS::compensateSensorErrors()
     magnetom[0] = (raw_magnetom[0] - MAGN_X_OFFSET) * MAGN_X_SCALE;
     magnetom[1] = (raw_magnetom[1] - MAGN_Y_OFFSET) * MAGN_Y_SCALE;
     magnetom[2] = (raw_magnetom[2] - MAGN_Z_OFFSET) * MAGN_Z_SCALE;
-    real_magnetom[0] = magnetom[0] / MAGN_SCALED_GAUSS(1);
-    real_magnetom[1] = magnetom[1] / MAGN_SCALED_GAUSS(1);
-    real_magnetom[2] = magnetom[2] / MAGN_SCALED_GAUSS(1);
+    real_magnetom[0] = magnetom[0] * MAGN_SCALED_GAUSS(1);
+    real_magnetom[1] = magnetom[1] * MAGN_SCALED_GAUSS(1);
+    real_magnetom[2] = magnetom[2] * MAGN_SCALED_GAUSS(1);
 #endif
 
     gyro[0] = raw_gyro[0] - GYRO_AVERAGE_OFFSET_X; // gyro x roll
@@ -177,6 +184,10 @@ void AHRS::delayMS(uint16_t delayMS)
     delay(delayMS);
 }
 
+void AHRS::sendData(uint8_t *data, size_t length)
+{
+}
+
 float AHRS::getData(SensorType sensorType, Axis axis, float *data)
 {
     if (axis != Axis::Invalid)
@@ -186,7 +197,7 @@ float AHRS::getData(SensorType sensorType, Axis axis, float *data)
         case SensorType::Accel:
             return real_accel[static_cast<int>(axis)];
         case SensorType::Magnetom:
-            return real_magnetom[static_cast<int>(axis)];
+            return magnetom[static_cast<int>(axis)];
         case SensorType::Gyro:
             return real_gyro[static_cast<int>(axis)];
         case SensorType::Euler:
@@ -509,4 +520,9 @@ void AHRS::initRotationMatrix(float m[3][3], float yaw, float pitch, float roll)
     m[2][0] = -s2;
     m[2][1] = c2 * s1;
     m[2][2] = c1 * c2;
+}
+
+uint32_t AHRS::getSystemTime()
+{
+    return millis(); // 默认实现为 Arduino 的 millis()
 }
