@@ -36,26 +36,50 @@ BLEServer *pServer = NULL;
 BLECharacteristic *pCharacteristic = NULL;
 BLE2901 *descriptor_2901 = NULL;
 
-int16_t ax, ay, az;
-int16_t gx, gy, gz;
-int16_t mx, my, mz;
 float pressure, temp;
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
-
-AHRS ahrs;
-
-const int mpuinterruptPin=2;
-volatile bool mpuDataReady = false;
-
-const int ledPin = 7;             // 定义LED引脚
-unsigned long previousMillis = 0; // 上一次闪灯的时间
-unsigned long interval = 2000;    // 闪灯间隔时间（毫秒）
-unsigned long ledOnMillis = 0;    // 记录LED亮起的时间
-bool ledState = LOW;              // 当前LED状态
-
+const int mpuinterruptPin = 2;     // 定义MPU6050中断引脚
+const int ledPin = 7;              // 定义LED引脚
+unsigned long previousMillis = 0;  // 上一次闪灯的时间
+unsigned long interval = 2000;     // 闪灯间隔时间（毫秒）
+unsigned long ledOnMillis = 0;     // 记录LED亮起的时间
+bool ledState = LOW;               // 当前LED状态
 const int compassInterruptPin = 3; // 定义地磁计中断引脚
-volatile bool compassDataReady = false;
+QueueHandle_t sensorDataQueue;
+
+class CustomAHRS : public AHRS
+{
+public:
+    uint32_t getSystemTime() override
+    {
+        return xTaskGetTickCount() * portTICK_PERIOD_MS; // 使用 FreeRTOS 的时间函数
+    }
+    void fetchRawSensorData() override
+    {
+        if (digitalRead(mpuinterruptPin) == HIGH)
+        {
+            mpu.getMotion6(&raw_accel[0], &raw_accel[1], &raw_accel[2], &raw_gyro[0], &raw_gyro[1], &raw_gyro[2]);
+        }
+        if (digitalRead(compassInterruptPin) == HIGH)
+        {
+            compass.read();
+            raw_magnetom[0] = compass.getX();
+            raw_magnetom[1] = compass.getY();
+            raw_magnetom[2] = compass.getZ();
+        }
+    }
+    void sendData(uint8_t *data, size_t length) override
+    {
+        if (deviceConnected)
+        {
+            pCharacteristic->setValue(data, length);
+            pCharacteristic->notify();
+        }
+    }
+};
+
+CustomAHRS ahrs; // 使用自定义的 AHRS 类
 
 // See the following for generating UUIDs:
 // https://www.uuidgenerator.net/
@@ -74,41 +98,6 @@ class MyServerCallbacks : public BLEServerCallbacks
         deviceConnected = false;
     }
 };
-
-void AHRS::fetchRawSensorData()
-{
-    if(mpuDataReady){
-        mpuDataReady = false;
-        // read raw accel/gyro measurements from device
-        mpu.getMotion6(&raw_accel[0], &raw_accel[1], &raw_accel[2], &raw_gyro[0], &raw_gyro[1], &raw_gyro[2]);
-    }
-    if (compassDataReady) {
-        compassDataReady = false;
-        // Return mag XYZ readings
-        compass.read();
-        raw_magnetom[0] = compass.getX();
-        raw_magnetom[1] = compass.getY();
-        raw_magnetom[2] = compass.getZ();
-    }
-}
-
-void AHRS::sendData(uint8_t *data, size_t length)
-{
-    if (deviceConnected)
-    {
-        pCharacteristic->setValue(data, length);
-        pCharacteristic->notify();
-    }
-}
-
-void ARDUINO_ISR_ATTR mpudataReadyISR() {
-    mpuDataReady = true;
-}
-
-// 地磁计中断服务函数
-void ARDUINO_ISR_ATTR compassDataReadyISR() {
-    compassDataReady = true;
-}
 
 void setup()
 {
@@ -148,21 +137,88 @@ void setup()
     mpu.setDLPFMode(MPU6050_DLPF_BW_98);             // 设置数字低通滤波器带宽为 98Hz
     mpu.setIntDataReadyEnabled(true);                // 启用数据就绪中断
     mpu.setInterruptMode(false);                     // 设置中断为高电平模式
-    mpu.setInterruptLatch(false);                    // 设置中断为脉冲模式
+    mpu.setInterruptLatch(true);                     // 设置中断为电平模式
     compass.init();
     compass.setMode(0x01, 0x0C, 0x00, 0X80);
     delay(1000);
-    compassDataReady = true;    //初始化算法时读取一次数据
-    mpuDataReady = true;
     ahrs.init();
     delay(100);
-
-    pinMode(ledPin, OUTPUT);   // 设置LED引脚为输出模式
-    digitalWrite(ledPin, LOW); // 初始化LED为关闭状态
-    pinMode(mpuinterruptPin, INPUT);   //设置陀螺仪中断引脚为输入模式
-    attachInterrupt(mpuinterruptPin, mpudataReadyISR, RISING);
+    pinMode(ledPin, OUTPUT);             // 设置LED引脚为输出模式
+    digitalWrite(ledPin, HIGH);          // 初始化LED为关闭状态
+    pinMode(mpuinterruptPin, INPUT);     // 设置陀螺仪中断引脚为输入模式
     pinMode(compassInterruptPin, INPUT); // 设置地磁计中断引脚为输入模式
-    attachInterrupt(compassInterruptPin, compassDataReadyISR, RISING);
+
+    sensorDataQueue = xQueueCreate(10, sizeof(SensorData)); // 创建消息队列
+    xTaskCreate(ahrs_task, "ahrs_task", 2048, NULL, 3, NULL);
+    xTaskCreate(send_task, "send_task", 1024, NULL, 2, NULL);
+    xTaskCreate(blink_task, "blink_task", 512, NULL, 1, NULL);
+}
+
+void ahrs_task(void *param)
+{
+    SensorData data;
+    const TickType_t loopDelay = pdMS_TO_TICKS(5); // 5ms 循环间隔
+    TickType_t lastWakeTime = xTaskGetTickCount();
+
+    while (1)
+    {
+        ahrs.run_once(5); // 每次运行一次 AHRS 算法
+        ahrs.getData(SensorType::Euler, Axis::Invalid, data.euler);
+        ahrs.getData(SensorType::Accel, Axis::Invalid, data.accel);
+        ahrs.getData(SensorType::Gyro, Axis::Invalid, data.gyro);
+        if (deviceConnected)
+        {
+            xQueueSend(sensorDataQueue, &data, 0); // 将数据发送到消息队列
+        }
+        Serial.print(data.euler[0]);
+        Serial.print(",");
+        Serial.print(data.euler[1]);
+        Serial.print(",");
+        Serial.print(data.euler[2]);
+        Serial.print("\r\n");
+        vTaskDelayUntil(&lastWakeTime, loopDelay); // 精确延迟到下一个周期
+    }
+}
+
+void send_task(void *param)
+{
+    SensorData data;
+    while (1)
+    {
+        if (xQueueReceive(sensorDataQueue, &data, 0)) // 从消息队列接收数据
+        {
+            ahrs.data_pack(data); // 调用 data_pack 函数发送数据
+        }
+        if (!deviceConnected && oldDeviceConnected)
+        {
+            interval = 7000;
+            digitalWrite(ledPin, HIGH);
+            vTaskDelay(pdMS_TO_TICKS(5000)); // give the bluetooth stack the chance to get things ready
+            pServer->startAdvertising();     // restart advertising
+            Serial.println("start advertising");
+            oldDeviceConnected = deviceConnected;
+        }
+        // connecting
+        if (deviceConnected && !oldDeviceConnected)
+        {
+            // do stuff here on connecting
+            interval = 400;
+            digitalWrite(ledPin, HIGH);
+            oldDeviceConnected = deviceConnected;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+void blink_task(void *param)
+{
+    while (1)
+    {
+        digitalWrite(ledPin, LOW);           // 打开LED
+        vTaskDelay(pdMS_TO_TICKS(150));      // LED亮起150ms
+        digitalWrite(ledPin, HIGH);          // 关闭LED
+        vTaskDelay(pdMS_TO_TICKS(interval)); // 闪灯间隔
+    }
 }
 
 void loop()
@@ -171,49 +227,9 @@ void loop()
     // {
     //     ahrs.run_loop(5, true);
     // }
-    ahrs.run_loop(5, false);
     // ahrs.calibration(0);
 
     // disconnecting
-    if (!deviceConnected && oldDeviceConnected)
-    {
-        interval = 7000;
-        digitalWrite(ledPin, HIGH);
-        delay(5000);                 // give the bluetooth stack the chance to get things ready
-        pServer->startAdvertising(); // restart advertising
-        Serial.println("start advertising");
-        oldDeviceConnected = deviceConnected;
-    }
-    // connecting
-    if (deviceConnected && !oldDeviceConnected)
-    {
-        // do stuff here on connecting
-        interval = 400;
-        digitalWrite(ledPin, HIGH);
-        oldDeviceConnected = deviceConnected;
-    }
-
-    // 非阻塞式闪灯逻辑
-    unsigned long currentMillis = millis();
-    if (ledState == LOW && currentMillis - previousMillis >= interval)
-    {
-        previousMillis = currentMillis;
-        ledState = HIGH;
-        ledOnMillis = currentMillis;
-        digitalWrite(ledPin, LOW); // 打开LED
-    }
-    else if (ledState == HIGH && currentMillis - ledOnMillis >= 150)
-    {
-        ledState = LOW;
-        digitalWrite(ledPin, HIGH); // 关闭LED
-    }
-
-    Serial.print(ahrs.getData(SensorType::Euler, Axis::X));
-    Serial.print(",");
-    Serial.print(ahrs.getData(SensorType::Euler, Axis::Y));
-    Serial.print(",");
-    Serial.print(ahrs.getData(SensorType::Euler, Axis::Z));
-    Serial.print("\n");
 
     // Serial.print(ahrs.getData(SensorType::Magnetom, Axis::X));
     // Serial.print(",");
