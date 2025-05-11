@@ -23,37 +23,35 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <BLE2901.h>
-
-// class default I2C address is 0x68
-// specific I2C addresses may be passed as a parameter here
-// AD0 low = 0x68 (default for SparkFun breakout and InvenSense evaluation board)
-// AD0 high = 0x69
-// MPU6050 mpu;
-MPU6050 mpu(0x69); // <-- use for AD0 high
-QMC5883LCompass compass;
-// ArtronShop_SPL06_001 pres(0x77, &Wire); // ADDR: 0 => 0x77, ADDR: 1 => 0x76
-BLEServer *pServer = NULL;
-BLECharacteristic *pCharacteristic = NULL;
-BLE2901 *descriptor_2901 = NULL;
+#include <Tone.h>
 
 float pressure, temp;
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
 const int mpuinterruptPin = 2;     // 定义MPU6050中断引脚
 const int ledPin = 7;              // 定义LED引脚
-unsigned long previousMillis = 0;  // 上一次闪灯的时间
 unsigned long interval = 2000;     // 闪灯间隔时间（毫秒）
-unsigned long ledOnMillis = 0;     // 记录LED亮起的时间
-bool ledState = LOW;               // 当前LED状态
 const int compassInterruptPin = 3; // 定义地磁计中断引脚
+const int batteryPin = 0;          // 定义电池测量引脚
+const int buzzerPin = 1;
+bool buzzerStartup = true;
+bool buzzerError = false;
+bool buzzerSuccess = false;
 QueueHandle_t sensorDataQueue;
+
+MPU6050 mpu(0x69);
+QMC5883LCompass compass;
+BLEServer *pServer = NULL;
+BLECharacteristic *pCharacteristic = NULL;
+BLE2901 *descriptor_2901 = NULL;
+Tone buzzer(buzzerPin);
 
 class CustomAHRS : public AHRS
 {
 public:
     uint32_t getSystemTime() override
     {
-        return xTaskGetTickCount() * portTICK_PERIOD_MS; // 使用 FreeRTOS 的时间函数
+        return xTaskGetTickCount() * portTICK_PERIOD_MS;
     }
     void fetchRawSensorData() override
     {
@@ -61,13 +59,13 @@ public:
         {
             mpu.getMotion6(&raw_accel[0], &raw_accel[1], &raw_accel[2], &raw_gyro[0], &raw_gyro[1], &raw_gyro[2]);
         }
-        if (digitalRead(compassInterruptPin) == HIGH)
-        {
-            compass.read();
-            raw_magnetom[0] = compass.getX();
-            raw_magnetom[1] = compass.getY();
-            raw_magnetom[2] = compass.getZ();
-        }
+        // if (digitalRead(compassInterruptPin) == HIGH)
+        // {
+        //     compass.read();
+        //     raw_magnetom[0] = compass.getX();
+        //     raw_magnetom[1] = compass.getY();
+        //     raw_magnetom[2] = compass.getZ();
+        // }
     }
     void sendData(uint8_t *data, size_t length) override
     {
@@ -117,7 +115,7 @@ void setup()
     pCharacteristic->addDescriptor(new BLE2902());
     // Adds also the Characteristic User Description - 0x2901 descriptor
     descriptor_2901 = new BLE2901();
-    descriptor_2901->setDescription("My own description for this characteristic.");
+    descriptor_2901->setDescription("AHRS Server");
     descriptor_2901->setAccessPermissions(ESP_GATT_PERM_READ); // enforce read only - default is Read|Write
     pCharacteristic->addDescriptor(descriptor_2901);
     // Start the service
@@ -149,9 +147,11 @@ void setup()
     pinMode(compassInterruptPin, INPUT); // 设置地磁计中断引脚为输入模式
 
     sensorDataQueue = xQueueCreate(10, sizeof(SensorData)); // 创建消息队列
-    xTaskCreate(ahrs_task, "ahrs_task", 2048, NULL, 3, NULL);
-    xTaskCreate(send_task, "send_task", 1024, NULL, 2, NULL);
-    xTaskCreate(blink_task, "blink_task", 512, NULL, 1, NULL);
+    xTaskCreate(ahrs_task, "ahrs_task", 1024, NULL, 5, NULL);
+    xTaskCreate(send_task, "send_task", 1024, NULL, 4, NULL);
+    xTaskCreate(blink_task, "blink_task", 512, NULL, 3, NULL);
+    xTaskCreate(battery_task, "battery_task", 1024, NULL, 2, NULL);
+    xTaskCreate(buzzer_task, "buzzer_task", 1024, NULL, 1, NULL);
 }
 
 void ahrs_task(void *param)
@@ -170,12 +170,12 @@ void ahrs_task(void *param)
         {
             xQueueSend(sensorDataQueue, &data, 0); // 将数据发送到消息队列
         }
-        Serial.print(data.euler[0]);
-        Serial.print(",");
-        Serial.print(data.euler[1]);
-        Serial.print(",");
-        Serial.print(data.euler[2]);
-        Serial.print("\r\n");
+        // Serial.print(data.euler[0]);
+        // Serial.print(",");
+        // Serial.print(data.euler[1]);
+        // Serial.print(",");
+        // Serial.print(data.euler[2]);
+        // Serial.print("\r\n");
         vTaskDelayUntil(&lastWakeTime, loopDelay); // 精确延迟到下一个周期
     }
 }
@@ -191,17 +191,18 @@ void send_task(void *param)
         }
         if (!deviceConnected && oldDeviceConnected)
         {
+            buzzerError = true;
             interval = 7000;
             digitalWrite(ledPin, HIGH);
             vTaskDelay(pdMS_TO_TICKS(5000)); // give the bluetooth stack the chance to get things ready
             pServer->startAdvertising();     // restart advertising
-            Serial.println("start advertising");
             oldDeviceConnected = deviceConnected;
         }
         // connecting
         if (deviceConnected && !oldDeviceConnected)
         {
             // do stuff here on connecting
+            buzzerSuccess = true;
             interval = 400;
             digitalWrite(ledPin, HIGH);
             oldDeviceConnected = deviceConnected;
@@ -221,20 +222,50 @@ void blink_task(void *param)
     }
 }
 
+void battery_task(void *param)
+{
+    int batteryValue;
+    while (1)
+    {
+        batteryValue = analogReadMilliVolts(batteryPin) * 3;
+        Serial.print("Battery Voltage: ");
+        Serial.print(batteryValue);
+        Serial.print(" mV\r\n");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+void buzzer_task(void *param)
+{
+    while (1)
+    {
+        if (buzzerStartup)
+        {
+            buzzerStartup = false;
+            buzzer.play(startupMelody);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+        else if (buzzerError)
+        {
+            buzzerError = false;
+            buzzer.play(errorMelody);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+        else if (buzzerSuccess)
+        {
+            buzzerSuccess = false;
+            buzzer.play(successMelody);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+        else
+        {
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+        
+    }
+}
+
 void loop()
 {
-    // if(deviceConnected)
-    // {
-    //     ahrs.run_loop(5, true);
-    // }
-    // ahrs.calibration(0);
 
-    // disconnecting
-
-    // Serial.print(ahrs.getData(SensorType::Magnetom, Axis::X));
-    // Serial.print(",");
-    // Serial.print(ahrs.getData(SensorType::Magnetom, Axis::Y));
-    // Serial.print(",");
-    // Serial.print(ahrs.getData(SensorType::Magnetom, Axis::Z));
-    // Serial.print("\n");
 }
