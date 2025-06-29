@@ -24,6 +24,7 @@
 #include <BLE2902.h>
 #include <BLE2901.h>
 #include <Tone.h>
+#include <U8g2lib.h>
 
 float pressure, temp;
 bool deviceConnected = false;
@@ -33,14 +34,24 @@ const int ledPin = 7;              // 定义LED引脚
 unsigned long interval = 2000;     // 闪灯间隔时间（毫秒）
 const int compassInterruptPin = 3; // 定义地磁计中断引脚
 const int batteryPin = 0;          // 定义电池测量引脚
+const int batteryThreshold = 3580; // 关机电压mV
 const int buzzerPin = 1;
 bool buzzerStartup = true;
 bool buzzerError = false;
 bool buzzerSuccess = false;
+bool buzzerLowbattery = false;
+
 QueueHandle_t sensorDataQueue;
+TaskHandle_t ahrsTaskHandle;
+TaskHandle_t sendTaskHandle;
+TaskHandle_t blinkTaskHandle;
+TaskHandle_t batteryTaskHandle;
+TaskHandle_t buzzerTaskHandle;
+TaskHandle_t oledTaskHandle;
 
 MPU6050 mpu(0x69);
 QMC5883LCompass compass;
+U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, /* clock=*/4, /* data=*/5, /* reset=*/U8X8_PIN_NONE);
 BLEServer *pServer = NULL;
 BLECharacteristic *pCharacteristic = NULL;
 BLE2901 *descriptor_2901 = NULL;
@@ -59,13 +70,13 @@ public:
         {
             mpu.getMotion6(&raw_accel[0], &raw_accel[1], &raw_accel[2], &raw_gyro[0], &raw_gyro[1], &raw_gyro[2]);
         }
-        // if (digitalRead(compassInterruptPin) == HIGH)
-        // {
-        //     compass.read();
-        //     raw_magnetom[0] = compass.getX();
-        //     raw_magnetom[1] = compass.getY();
-        //     raw_magnetom[2] = compass.getZ();
-        // }
+        if (digitalRead(compassInterruptPin) == HIGH)
+        {
+            compass.read();
+            raw_magnetom[0] = compass.getX();
+            raw_magnetom[1] = compass.getY();
+            raw_magnetom[2] = compass.getZ();
+        }
     }
     void sendData(uint8_t *data, size_t length) override
     {
@@ -129,6 +140,7 @@ void setup()
 
     Wire.begin(18, 10);
     Wire.setClock(400000); // 400kHz I2C clock. Comment this line if having compilation difficulties
+    u8g2.begin();
     mpu.initialize();
     mpu.setFullScaleGyroRange(MPU6050_GYRO_FS_2000); // 设置陀螺仪量程为 ±2000°/s
     mpu.setFullScaleAccelRange(MPU6050_ACCEL_FS_16); // 设置加速度计量程为 ±16g
@@ -136,6 +148,7 @@ void setup()
     mpu.setIntDataReadyEnabled(true);                // 启用数据就绪中断
     mpu.setInterruptMode(false);                     // 设置中断为高电平模式
     mpu.setInterruptLatch(true);                     // 设置中断为电平模式
+    // compass.setADDR(0x30);
     compass.init();
     compass.setMode(0x01, 0x0C, 0x00, 0X80);
     delay(1000);
@@ -146,12 +159,13 @@ void setup()
     pinMode(mpuinterruptPin, INPUT);     // 设置陀螺仪中断引脚为输入模式
     pinMode(compassInterruptPin, INPUT); // 设置地磁计中断引脚为输入模式
 
-    sensorDataQueue = xQueueCreate(10, sizeof(SensorData)); // 创建消息队列
-    xTaskCreate(ahrs_task, "ahrs_task", 1024, NULL, 5, NULL);
-    xTaskCreate(send_task, "send_task", 1024, NULL, 4, NULL);
-    xTaskCreate(blink_task, "blink_task", 512, NULL, 3, NULL);
-    xTaskCreate(battery_task, "battery_task", 1024, NULL, 2, NULL);
-    xTaskCreate(buzzer_task, "buzzer_task", 1024, NULL, 1, NULL);
+    sensorDataQueue = xQueueCreate(30, sizeof(SensorData)); // 创建消息队列
+    xTaskCreate(ahrs_task, "ahrs_task", 1024, NULL, 6, &ahrsTaskHandle);
+    xTaskCreate(send_task, "send_task", 1024, NULL, 5, &sendTaskHandle);
+    xTaskCreate(battery_task, "battery_task", 1024, NULL, 4, &batteryTaskHandle);
+    xTaskCreate(buzzer_task, "buzzer_task", 1024, NULL, 3, &buzzerTaskHandle);
+    // xTaskCreate(oled_task, "oled_task", 2048, NULL, 2, &oledTaskHandle);
+    xTaskCreate(blink_task, "blink_task", 512, NULL, 1, &blinkTaskHandle);
 }
 
 void ahrs_task(void *param)
@@ -162,20 +176,21 @@ void ahrs_task(void *param)
 
     while (1)
     {
-        ahrs.run_once(5); // 每次运行一次 AHRS 算法
+        if (uxQueueSpacesAvailable(sensorDataQueue) == 0)
+        {
+            xQueueReceive(sensorDataQueue, &data, 0);  //队列满丢弃头部数据
+        }
+        ahrs.run_once(5);
         ahrs.getData(SensorType::Euler, Axis::Invalid, data.euler);
         ahrs.getData(SensorType::Accel, Axis::Invalid, data.accel);
         ahrs.getData(SensorType::Gyro, Axis::Invalid, data.gyro);
-        if (deviceConnected)
-        {
-            xQueueSend(sensorDataQueue, &data, 0); // 将数据发送到消息队列
-        }
-        // Serial.print(data.euler[0]);
-        // Serial.print(",");
-        // Serial.print(data.euler[1]);
-        // Serial.print(",");
-        // Serial.print(data.euler[2]);
-        // Serial.print("\r\n");
+        xQueueSend(sensorDataQueue, &data, 0);
+        Serial.print(data.euler[0]);
+        Serial.print(",");
+        Serial.print(data.euler[1]);
+        Serial.print(",");
+        Serial.print(data.euler[2]);
+        Serial.print("\r\n");
         vTaskDelayUntil(&lastWakeTime, loopDelay); // 精确延迟到下一个周期
     }
 }
@@ -185,9 +200,12 @@ void send_task(void *param)
     SensorData data;
     while (1)
     {
-        if (xQueueReceive(sensorDataQueue, &data, 0)) // 从消息队列接收数据
+        if (deviceConnected)
         {
-            ahrs.data_pack(data); // 调用 data_pack 函数发送数据
+            if (xQueueReceive(sensorDataQueue, &data, 0))
+            {
+                ahrs.data_pack(data);
+            }
         }
         if (!deviceConnected && oldDeviceConnected)
         {
@@ -211,6 +229,77 @@ void send_task(void *param)
     }
 }
 
+void oled_task(void *param)
+{
+    SensorData data;
+    while (1)
+    {
+        if (xQueuePeek(sensorDataQueue, &data, 0)) // 从消息队列读取数据但不移除
+        {
+            u8g2.clearBuffer();
+
+            u8g2.setFont(u8g2_font_5x8_tr);
+
+            // 左侧显示欧拉角
+            u8g2.setCursor(0, 10);
+            u8g2.printf("Roll :%6.2f", data.euler[0]);
+
+            u8g2.setCursor(0, 22);
+            u8g2.printf("Pitch:%6.2f", data.euler[1]);
+
+            u8g2.setCursor(0, 34);
+            u8g2.printf("Yaw  :%6.2f", data.euler[2]);
+            
+            // 右侧显示加速度
+            u8g2.setCursor(72, 10);
+            u8g2.printf("AX:%6.2f", data.accel[0]);
+
+            u8g2.setCursor(72, 22);
+            u8g2.printf("AY:%6.2f", data.accel[1]);
+
+            u8g2.setCursor(72, 34);
+            u8g2.printf("AZ:%6.2f", data.accel[2]);
+
+            // 右侧显示角速度
+            u8g2.setCursor(72, 46);
+            u8g2.printf("GX:%6.2f", data.gyro[0]);
+
+            u8g2.setCursor(72, 58);
+            u8g2.printf("GY:%6.2f", data.gyro[1]);
+
+            u8g2.setCursor(72, 70);
+            u8g2.printf("GZ:%6.2f", data.gyro[2]);
+
+            // 下方绘制指示图标
+            int centerX = 30; // 圆心X坐标
+            int centerY = 48; // 圆心Y坐标
+            int radius = 6;  // 圆的半径
+
+            // 绘制圆
+            u8g2.drawCircle(centerX, centerY, radius);
+
+            // 根据Roll和Pitch绘制移动的线
+            int rollLineX = (int)(data.euler[0] * -15); // Roll影响水平线
+            int pitchLineY = (int)(data.euler[1] * -6); // Pitch影响垂直线
+
+            // 绘制水平线
+            u8g2.drawLine(centerX-25, centerY+pitchLineY, centerX+25, centerY+pitchLineY);
+
+            // 绘制垂直线
+            u8g2.drawLine(centerX+rollLineX, centerY-10, centerX+rollLineX, centerY+10);
+
+            // 绘制边框
+            u8g2.drawLine(centerX-25, centerY-10, centerX+25, centerY-10);
+            u8g2.drawLine(centerX-25, centerY+10, centerX+25, centerY+10);
+            u8g2.drawLine(centerX+25, centerY-10, centerX+25, centerY+10);
+            u8g2.drawLine(centerX-25, centerY-10, centerX-25, centerY+10);
+
+            u8g2.sendBuffer(); // 将缓冲区内容发送到OLED
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
 void blink_task(void *param)
 {
     while (1)
@@ -228,9 +317,15 @@ void battery_task(void *param)
     while (1)
     {
         batteryValue = analogReadMilliVolts(batteryPin) * 3;
-        Serial.print("Battery Voltage: ");
-        Serial.print(batteryValue);
-        Serial.print(" mV\r\n");
+        if (batteryValue < batteryThreshold)
+        {
+            buzzerLowbattery = true;
+            vTaskDelay(pdMS_TO_TICKS(9000)); // 等待蜂鸣器播放完成
+            esp_deep_sleep_start();
+        }
+        // Serial.print("Battery Voltage: ");
+        // Serial.print(batteryValue);
+        // Serial.print(" mV\r\n");
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
@@ -251,6 +346,12 @@ void buzzer_task(void *param)
             buzzer.play(errorMelody);
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
+        else if (buzzerLowbattery)
+        {
+            buzzerLowbattery = false;
+            buzzer.play(errorMelody);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
         else if (buzzerSuccess)
         {
             buzzerSuccess = false;
@@ -261,11 +362,9 @@ void buzzer_task(void *param)
         {
             vTaskDelay(pdMS_TO_TICKS(500));
         }
-        
     }
 }
 
 void loop()
 {
-
 }
