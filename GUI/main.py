@@ -155,49 +155,50 @@ class mainwindow(QMainWindow):
             self.ui.pushButton_2.setText("自校准中...")
             self.setAllEnabled(False)
             self.repaint()
-            overtime = 0
-            while 1:
-                for i in range(0 , 20):
-                    self.AngleX_C_error = self.AngleX_C_error + self.BLEdevice.deviceData.get('AngX')
-                    self.AngleY_C_error = self.AngleY_C_error + self.BLEdevice.deviceData.get('AngY')
-                    self.AngleZ_C_error = self.AngleZ_C_error + self.BLEdevice.deviceData.get('AngZ')
-                    self.AccelerateX_C_error = self.AccelerateX_C_error + self.BLEdevice.deviceData.get('AccX')
-                    self.AccelerateY_C_error = self.AccelerateY_C_error + self.BLEdevice.deviceData.get('AccY')
-                    self.AccelerateZ_C_error = self.AccelerateZ_C_error + self.BLEdevice.deviceData.get('AccZ')
-                    time.sleep(0.1)
-                self.AngleX_C_error = self.AngleX_C_error * 0.05
-                self.AngleY_C_error = self.AngleY_C_error * 0.05
-                self.AngleZ_C_error = self.AngleZ_C_error * 0.05
-                self.AccelerateX_C_error = self.AccelerateX_C_error * 0.05
-                self.AccelerateY_C_error = self.AccelerateY_C_error * 0.05
-                self.AccelerateZ_C_error = self.AccelerateZ_C_error * 0.05
-                print("x_error = {:.3f} , y_error = {:.3f}".format(self.AngleX_C_error , self.AngleY_C_error))
-                if abs(self.AngleX_C_error) < 2 and abs(self.AngleY_C_error) < 2:
-                    print("自校正完成，同时水平处于水平状态")
-                    print("Angle_Ex = {:.3} , Angle_Ey = {:.3} , Angle_Ez = {:.3}".format(self.AngleX_C_error , self.AngleY_C_error , self.AngleZ_C_error))
-                    print("Accelerate_Ex = {:.3} , Accelerate_Ey = {:.3} , Accelerate_Ez = {:.3}".format(self.AccelerateX_C_error , self.AccelerateY_C_error , self.AccelerateZ_C_error))
-                    winsound.Beep(2000, 300)
-                    time.sleep(0.1)
-                    winsound.Beep(2000, 300)
-                    time.sleep(0.5)  
-                    self.ui.pushButton_2.setStyleSheet("background-color: white")
-                    self.ui.pushButton_2.setText("校准成功\r\n再次校准")
-                    self.setAllEnabled(True)              
-                    break
-                else:
-                    self.AngleX_C_error = 0
-                    self.AngleY_C_error = 0
-                    self.AngleZ_C_error = 0
-                    self.MagneticX_C_error = 0
-                    self.MagneticY_C_error = 0
-                    self.MagneticZ_C_error = 0
-                    if(overtime > 10):
-                        print("over time! 目前的位置不水平已超时退出")
-                        self.ui.pushButton_2.setStyleSheet("background-color: white")
-                        self.ui.pushButton_2.setText("校准失败\r\n再次校准")
-                        self.setAllEnabled(True)   
-                        break
-                    overtime = overtime + 1
+            for i in range(0 , 20):
+                self.AngleX_C_error = self.AngleX_C_error + self.BLEdevice.deviceData.get('AngX')
+                self.AngleY_C_error = self.AngleY_C_error + self.BLEdevice.deviceData.get('AngY')
+                self.AngleZ_C_error = self.AngleZ_C_error + self.BLEdevice.deviceData.get('AngZ')
+                self.AccelerateX_C_error = self.AccelerateX_C_error + self.BLEdevice.deviceData.get('AccX')
+                self.AccelerateY_C_error = self.AccelerateY_C_error + self.BLEdevice.deviceData.get('AccY')
+                self.AccelerateZ_C_error = self.AccelerateZ_C_error + self.BLEdevice.deviceData.get('AccZ')
+                time.sleep(0.1)
+            self.AngleX_C_error = self.AngleX_C_error * 0.05
+            self.AngleY_C_error = self.AngleY_C_error * 0.05
+            self.AngleZ_C_error = self.AngleZ_C_error * 0.05
+            self.AccelerateX_C_error = self.AccelerateX_C_error * 0.05
+            self.AccelerateY_C_error = self.AccelerateY_C_error * 0.05
+            self.AccelerateZ_C_error = self.AccelerateZ_C_error * 0.05
+            print("x_error = {:.3f} , y_error = {:.3f}".format(self.AngleX_C_error , self.AngleY_C_error))
+            self.ui.pushButton_2.setStyleSheet("background-color: white")
+            self.ui.pushButton_2.setText("自校准")
+            self.setAllEnabled(True)   
+                # if abs(self.AngleX_C_error) < 2 and abs(self.AngleY_C_error) < 2:
+                #     print("自校正完成，同时水平处于水平状态")
+                #     print("Angle_Ex = {:.3} , Angle_Ey = {:.3} , Angle_Ez = {:.3}".format(self.AngleX_C_error , self.AngleY_C_error , self.AngleZ_C_error))
+                #     print("Accelerate_Ex = {:.3} , Accelerate_Ey = {:.3} , Accelerate_Ez = {:.3}".format(self.AccelerateX_C_error , self.AccelerateY_C_error , self.AccelerateZ_C_error))
+                #     winsound.Beep(2000, 300)
+                #     time.sleep(0.1)
+                #     winsound.Beep(2000, 300)
+                #     time.sleep(0.5)  
+                #     self.ui.pushButton_2.setStyleSheet("background-color: white")
+                #     self.ui.pushButton_2.setText("校准成功\r\n再次校准")
+                #     self.setAllEnabled(True)              
+                #     break
+                # else:
+                #     self.AngleX_C_error = 0
+                #     self.AngleY_C_error = 0
+                #     self.AngleZ_C_error = 0
+                #     self.MagneticX_C_error = 0
+                #     self.MagneticY_C_error = 0
+                #     self.MagneticZ_C_error = 0
+                #     if(overtime > 10):
+                #         print("over time! 目前的位置不水平已超时退出")
+                #         self.ui.pushButton_2.setStyleSheet("background-color: white")
+                #         self.ui.pushButton_2.setText("校准失败\r\n再次校准")
+                #         self.setAllEnabled(True)   
+                #         break
+                #     overtime = overtime + 1
     
     def Measure_Angle(self):
         if self.BLEdevice is not None and self.BLEdevice.isOpen:
@@ -209,8 +210,9 @@ class mainwindow(QMainWindow):
 
     def measure_angle_thread(self):
         while 1:
-            time.sleep(0.1)
-            if self.BLEdevice.deviceData.get('AccX')**2 + self.BLEdevice.deviceData.get('AccY')**2 + self.BLEdevice.deviceData.get('AccZ')**2 < 0.81:
+            # time.sleep(0.1)
+            print(self.Angle_slope*180/math.pi)
+            if (self.BLEdevice.deviceData.get('AccX')**2 + self.BLEdevice.deviceData.get('AccY')**2 + self.BLEdevice.deviceData.get('AccZ')**2) < 0.81:
                 angle1 = self.Angle_slope
                 angle2 = math.atan((9.8*math.sin(angle1) - abs(self.BLEdevice.deviceData.get('AccX'))-abs(self.BLEdevice.deviceData.get('AccY'))) / (9.8 * math.cos(angle1)))
                 self.ui.lcdNumber.display(angle1 * 180 / math.pi)

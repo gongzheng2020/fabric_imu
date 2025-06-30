@@ -34,12 +34,14 @@ const int ledPin = 7;              // 定义LED引脚
 unsigned long interval = 2000;     // 闪灯间隔时间（毫秒）
 const int compassInterruptPin = 3; // 定义地磁计中断引脚
 const int batteryPin = 0;          // 定义电池测量引脚
-const int batteryThreshold = 3580; // 关机电压mV
+const float batteryThreshold = 3.58; // 关机电压mV
+float batteryValue;
 const int buzzerPin = 1;
 bool buzzerStartup = true;
 bool buzzerError = false;
 bool buzzerSuccess = false;
 bool buzzerLowbattery = false;
+bool oledLowbattery = false;
 
 QueueHandle_t sensorDataQueue;
 TaskHandle_t ahrsTaskHandle;
@@ -164,7 +166,7 @@ void setup()
     xTaskCreate(send_task, "send_task", 1024, NULL, 5, &sendTaskHandle);
     xTaskCreate(battery_task, "battery_task", 1024, NULL, 4, &batteryTaskHandle);
     xTaskCreate(buzzer_task, "buzzer_task", 1024, NULL, 3, &buzzerTaskHandle);
-    // xTaskCreate(oled_task, "oled_task", 2048, NULL, 2, &oledTaskHandle);
+    xTaskCreate(oled_task, "oled_task", 2048, NULL, 2, &oledTaskHandle);
     xTaskCreate(blink_task, "blink_task", 512, NULL, 1, &blinkTaskHandle);
 }
 
@@ -185,12 +187,12 @@ void ahrs_task(void *param)
         ahrs.getData(SensorType::Accel, Axis::Invalid, data.accel);
         ahrs.getData(SensorType::Gyro, Axis::Invalid, data.gyro);
         xQueueSend(sensorDataQueue, &data, 0);
-        Serial.print(data.euler[0]);
-        Serial.print(",");
-        Serial.print(data.euler[1]);
-        Serial.print(",");
-        Serial.print(data.euler[2]);
-        Serial.print("\r\n");
+        // Serial.print(data.accel[0]);
+        // Serial.print(",");
+        // Serial.print(data.accel[1]);
+        // Serial.print(",");
+        // Serial.print(data.accel[2]);
+        // Serial.print("\r\n");
         vTaskDelayUntil(&lastWakeTime, loopDelay); // 精确延迟到下一个周期
     }
 }
@@ -234,10 +236,25 @@ void oled_task(void *param)
     SensorData data;
     while (1)
     {
-        if (xQueuePeek(sensorDataQueue, &data, 0)) // 从消息队列读取数据但不移除
+        if(oledLowbattery)
         {
             u8g2.clearBuffer();
-
+            u8g2.setFont(u8g2_font_8x13_tr);
+            u8g2.setCursor(10, 34);
+            u8g2.printf("Low Battery!!!");
+            u8g2.sendBuffer();
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            u8g2.clearBuffer();
+            u8g2.sendBuffer();
+            oledLowbattery = false;
+            while(1)
+            {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+        }
+        else if(xQueuePeek(sensorDataQueue, &data, 0)) // 从消息队列读取数据但不移除
+        {
+            u8g2.clearBuffer();
             u8g2.setFont(u8g2_font_5x8_tr);
 
             // 左侧显示欧拉角
@@ -248,7 +265,7 @@ void oled_task(void *param)
             u8g2.printf("Pitch:%6.2f", data.euler[1]);
 
             u8g2.setCursor(0, 34);
-            u8g2.printf("Yaw  :%6.2f", data.euler[2]);
+            u8g2.printf("Batty:%6.2f", batteryValue);
             
             // 右侧显示加速度
             u8g2.setCursor(72, 10);
@@ -313,14 +330,17 @@ void blink_task(void *param)
 
 void battery_task(void *param)
 {
-    int batteryValue;
     while (1)
     {
-        batteryValue = analogReadMilliVolts(batteryPin) * 3;
+        batteryValue = analogReadMilliVolts(batteryPin) * 0.003;
         if (batteryValue < batteryThreshold)
         {
             buzzerLowbattery = true;
-            vTaskDelay(pdMS_TO_TICKS(9000)); // 等待蜂鸣器播放完成
+            oledLowbattery = true;
+            while(buzzerLowbattery || oledLowbattery)
+            {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
             esp_deep_sleep_start();
         }
         // Serial.print("Battery Voltage: ");
@@ -336,27 +356,31 @@ void buzzer_task(void *param)
     {
         if (buzzerStartup)
         {
-            buzzerStartup = false;
             buzzer.play(startupMelody);
             vTaskDelay(pdMS_TO_TICKS(1000));
+            buzzerStartup = false;
         }
         else if (buzzerError)
         {
-            buzzerError = false;
             buzzer.play(errorMelody);
             vTaskDelay(pdMS_TO_TICKS(1000));
+            buzzerError = false;
         }
         else if (buzzerLowbattery)
         {
-            buzzerLowbattery = false;
             buzzer.play(errorMelody);
             vTaskDelay(pdMS_TO_TICKS(1000));
+            buzzerLowbattery = false;
+            while(1)
+            {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
         }
         else if (buzzerSuccess)
         {
-            buzzerSuccess = false;
             buzzer.play(successMelody);
             vTaskDelay(pdMS_TO_TICKS(1000));
+            buzzerSuccess = false;
         }
         else
         {
