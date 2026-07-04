@@ -1,7 +1,7 @@
 # Fabric_imu
 
 <p align="center">
-  <strong>中文</strong> | <a href="readme.zh.md">English</a>
+  <strong>中文</strong> | <a href="README.en.md">English</a>
 </p>
 
 <div align="center">
