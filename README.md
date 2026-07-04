@@ -4,10 +4,6 @@
   <strong>中文</strong> | <a href="README.en.md">English</a>
 </p>
 
-<div align="center">
-    <img src="assets/3d_model.jpg" width="500" alt="GUI 界面"/>
-</div>
-
 针对布料柔顺度量化难题，设计了一套基于九轴IMU的便携式测量系统。独立完成从电路设计、外壳建模、嵌入式编程到上位机数据处理软件的全流程开发。
 
 ## [演示(B站链接)](https://www.bilibili.com/video/BV1wqMF64Ent/)
