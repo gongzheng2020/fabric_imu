@@ -12,9 +12,9 @@
 
 ## 演示
 
-[测量过程简单演示](assets/demo.mp4)：
-
-https://github.com/user-attachments/assets/e533ca0e-1a5b-42d1-a838-940a8997ca75
+<div align="center">
+    <img src="assets/demo.webp" width="500" alt="测量过程演示"/>
+</div>
 
 ## 硬件设计
 
