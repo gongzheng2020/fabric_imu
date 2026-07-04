@@ -10,7 +10,7 @@
 
 A portable measurement system based on a 9-axis IMU, designed to quantify fabric softness. Independently completed the full development pipeline from circuit design, enclosure modeling, embedded programming, to host computer data processing software.
 
-## Demo
+## [Demo](https://www.bilibili.com/video/BV1wqMF64Ent/)
 
 <div align="center">
     <img src="assets/demo.webp" width="500" alt="Measurement demo"/>
