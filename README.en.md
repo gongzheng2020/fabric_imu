@@ -22,7 +22,7 @@ A portable measurement system based on a 9-axis IMU, designed to quantify fabric
 
 The main controller uses the **ESP32C2** microcontroller, consisting of a control board and an expansion board for modular design.
 
-- **Control Board** — Integrates the MCU and a 9-axis gyroscope, responsible for calculating device姿态 and providing additional GPIO for expansion.
+- **Control Board** — Integrates the MCU and a 9-axis gyroscope, responsible for calculating device orientation and providing additional GPIO for expansion.
 
 <div align="center">
   <table>
