@@ -14,7 +14,7 @@
 
 [测量过程简单演示](assets/demo.mp4)：
 
-<iframe src="//player.bilibili.com/player.html?bvid=BV1j2MF6nESE&page=1" scrolling="no" border="0" frameborder="no" framespacing="0" allowfullscreen="true"> </iframe>
+https://github.com/user-attachments/assets/e533ca0e-1a5b-42d1-a838-940a8997ca75
 
 ## 硬件设计
 
